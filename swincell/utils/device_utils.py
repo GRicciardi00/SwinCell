@@ -16,7 +16,6 @@ def get_device(preferred=None):
       - cuda if available
       - mps if available
       - otherwise cpu
-
     preferred may be a string or torch.device.
     """
     if preferred is not None:
