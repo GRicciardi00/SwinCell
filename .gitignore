@@ -17,3 +17,5 @@ junk
 Nanolive_dataset
 *.tar
 .yaml
+.venv
+.python-version

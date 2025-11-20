@@ -12,7 +12,6 @@ import torch.utils.data.distributed
 from swincell.optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
 from swincell.trainer import run_training
 from swincell.utils.data_utils import folder_loader
-from swincell.utils.utils import load_model
 
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceLoss
@@ -22,7 +21,7 @@ from monai.metrics import DiceMetric
 from monai.networks.nets import SwinUNETR, UNet,ViTAutoEnc, UNETR
 from monai.transforms import Activations, AsDiscrete
 from monai.utils.enums import MetricReduction
-from swincell.utils.device_utils import get_device, select_distributed_backend, is_cuda_available
+from swincell.utils.device_utils import select_distributed_backend, is_cuda_available
 
 
 parser = argparse.ArgumentParser(description="SwinCell Training")
