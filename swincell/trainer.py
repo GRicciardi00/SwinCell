@@ -9,9 +9,10 @@ from tensorboardX import SummaryWriter
 from torch.cuda.amp import autocast
 from swincell.utils.utils import AverageMeter, distributed_all_gather
 from monai.data import decollate_batch
+from swincell.utils.device_utils import get_device
 
 
-def train_epoch(model, loader, optimizer, epoch, loss_func, args):
+def train_epoch(model, loader, optimizer, epoch, loss_func, device, args):
     model.train()
     start_time = time.time()
     run_loss = AverageMeter()
@@ -20,7 +21,7 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, args):
             data, target = batch_data
         else:
             data, target = batch_data["image"], batch_data["label"]
-        data, target = data.cuda(args.rank), target.cuda(args.rank)
+        data, target = data.to(device), target.to(device)
         for param in model.parameters():
             param.grad = None
         with autocast(enabled=False):
@@ -76,7 +77,7 @@ def train_epoch(model, loader, optimizer, epoch, loss_func, args):
     return run_loss.avg, img_list
 
 
-def val_epoch(model, loader, epoch, acc_func, args, model_inferer=None, post_sigmoid=None, post_pred=None):
+def val_epoch(model, loader, epoch, acc_func, device, args, model_inferer=None, post_sigmoid=None, post_pred=None):
     model.eval()
     start_time = time.time()
     run_acc = AverageMeter()   # cell probs
@@ -85,7 +86,7 @@ def val_epoch(model, loader, epoch, acc_func, args, model_inferer=None, post_sig
     with torch.no_grad():
         for idx, batch_data in enumerate(loader):
             data, target = batch_data["image"], batch_data["label"]
-            data, target = data.cuda(args.rank), target.cuda(args.rank)
+            data, target = data.to(device), target.to(device)
             with autocast(enabled=False):
                 logits = model_inferer(data)
             val_labels_list = decollate_batch(target)
@@ -100,7 +101,7 @@ def val_epoch(model, loader, epoch, acc_func, args, model_inferer=None, post_sig
             acc_func(y_pred=val_output_convert, y=val_label_convert)
             #validate with the binary masks 
             acc, not_nans = acc_func.aggregate()
-            acc = acc.cuda(args.rank)
+            acc = acc.to(device)
             if args.distributed:
                 acc_list, not_nans_list = distributed_all_gather(
                     [acc, not_nans], out_numpy=True, is_valid=idx < loader.sampler.valid_length
@@ -180,6 +181,8 @@ def run_training(
         if args.rank == 0:
             print("Writing Tensorboard logs to ", args.logdir)
     # scaler = None
+    device = get_device()
+    model = model.to(device)
 
     val_acc_max = 0.0
     for epoch in range(start_epoch, args.max_epochs):
@@ -189,7 +192,7 @@ def run_training(
         print(args.rank, time.ctime(), "Epoch:", epoch)
         epoch_time = time.time()
         train_loss, train_img_list = train_epoch(
-            model, train_loader, optimizer, epoch=epoch, loss_func=loss_func, args=args
+            model, train_loader, optimizer, epoch=epoch, loss_func=loss_func, device = device, args=args
         )
         if args.rank == 0:
             print(
@@ -210,6 +213,7 @@ def run_training(
                 epoch=epoch,
                 acc_func=acc_func,
                 model_inferer=model_inferer,
+                device = device,
                 args=args,
                 post_sigmoid=post_sigmoid,
                 post_pred=post_pred,

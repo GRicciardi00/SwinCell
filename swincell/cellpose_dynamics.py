@@ -10,6 +10,7 @@ Copyright © 2022 Howard Hughes Medical Institute, Authored by Carsen Stringer a
 import  os,glob
 from scipy.ndimage import maximum_filter1d, find_objects,binary_fill_holes
 from swincell.utils.utils import masks_to_edges
+from swincell.utils.device_utils import get_device
 import torch
 import numpy as np
 import tifffile
@@ -63,12 +64,12 @@ def batch_masks_to_flows(input_path,output_path,delete_edges=True,binary2sequent
         output_image[1:,...] = flows
         tifffile.imwrite(output_path + output_file_name, np.uint8(output_image))
 
-@njit('(float64[:], int32[:], int32[:], int32, int32, int32, int32)', nogil=True)
+@njit('(float32[:], int32[:], int32[:], int32, int32, int32, int32)', nogil=True)
 def _extend_centers(T,y,x,ymed,xmed,Lx, niter):
     """ run diffusion from center of mask (ymed, xmed) on mask pixels (y, x)
     Parameters
     --------------
-    T: float64, array
+    T: float32, array
         _ x Lx array that diffusion is run in
     y: int32, array
         pixels in y inside mask
@@ -84,7 +85,7 @@ def _extend_centers(T,y,x,ymed,xmed,Lx, niter):
         number of iterations to run diffusion
     Returns
     ---------------
-    T: float64, array
+    T: float32, array
         amount of diffused particles at each pixel
     """
 
@@ -98,7 +99,7 @@ def _extend_centers(T,y,x,ymed,xmed,Lx, niter):
 
 
 
-def _extend_centers_gpu(neighbors, centers, isneighbor, Ly, Lx, n_iter=200, device=torch.device('cuda')):
+def _extend_centers_gpu(neighbors, centers, isneighbor, Ly, Lx, n_iter=200, device=None):
     """ runs diffusion on GPU to generate flows for training images or quality control
     
     neighbors is 9 x pixels in masks, 
@@ -106,12 +107,12 @@ def _extend_centers_gpu(neighbors, centers, isneighbor, Ly, Lx, n_iter=200, devi
     isneighbor is valid neighbor boolean 9 x pixels
     
     """
-    if device is not None:
-        device = device
+    if device is  None:
+        device = get_device()
     nimg = neighbors.shape[0] // 9
     pt = torch.from_numpy(neighbors).to(device)
     
-    T = torch.zeros((nimg,Ly,Lx), dtype=torch.double, device=device)
+    T = torch.zeros((nimg,Ly,Lx), dtype=torch.float32, device=device)
     meds = torch.from_numpy(centers.astype(int)).to(device).long()
     isneigh = torch.from_numpy(isneighbor).to(device)
     for i in range(n_iter):
@@ -148,7 +149,7 @@ def masks_to_flows_gpu(masks, device=None):
         in which it resides 
     """
     if device is None:
-        device = torch.device('cuda')
+        device = get_device()
 
     
     Ly0,Lx0 = masks.shape
@@ -284,8 +285,8 @@ def masks_to_flows_cpu(masks, device=None):
     """
     
     Ly, Lx = masks.shape
-    mu = np.zeros((2, Ly, Lx), np.float64)
-    mu_c = np.zeros((Ly, Lx), np.float64)
+    mu = np.zeros((2, Ly, Lx), np.float32)
+    mu_c = np.zeros((Ly, Lx), np.float32)
     
     nmask = masks.max()
     slices = find_objects(masks)
@@ -308,7 +309,7 @@ def masks_to_flows_cpu(masks, device=None):
             mu_c[sr.start+y-1, sc.start+x-1] = np.exp(-d2/s2)
 
             niter = 2*np.int32(np.ptp(x) + np.ptp(y))
-            T = np.zeros((ly+2)*(lx+2), np.float64)
+            T = np.zeros((ly+2)*(lx+2), np.float32)
             T = _extend_centers(T, y, x, ymed, xmed, np.int32(lx), np.int32(niter))
             T[(y+1)*lx + x+1] = np.log(1.+T[(y+1)*lx + x+1])
 
@@ -351,11 +352,9 @@ def masks_to_flows(masks, use_gpu=False, device=None):
         dynamics_logger.warning('empty masks!')
         return np.zeros((2, *masks.shape), 'float32')
 
-    if use_gpu:
-        if use_gpu and device is None:
-            device = torch_GPU
-        elif device is None:
-            device = torch_CPU
+    if device is None:
+        device = get_device()
+    if device == "cuda":
         masks_to_flows_device = masks_to_flows_gpu
     else:
         masks_to_flows_device = masks_to_flows_cpu
@@ -401,6 +400,8 @@ def labels_to_flows(labels, files=None, use_gpu=False, device=None, redo_flows=F
 
     """
     nimg = len(labels)
+    if device is None:
+        device = get_device()
     if labels[0].ndim < 3:
         labels = [labels[n][np.newaxis,:,:] for n in range(nimg)]
 
@@ -621,6 +622,8 @@ def follow_flows(dP, mask=None, niter=200, interp=True, use_gpu=True, device=Non
         indices of pixels used for dynamics; [axis x Ly x Lx] or [axis x Lz x Ly x Lx]
 
     """
+    if device is None:
+        device = get_device()
     shape = np.array(dP.shape[1:]).astype(np.int32)
     niter = np.uint32(niter)
     if len(shape)>2:
@@ -677,6 +680,8 @@ def remove_bad_flow_masks(masks, flows, threshold=0.4, use_gpu=False, device=Non
         size [Ly x Lx] or [Lz x Ly x Lx]
     
     """
+    if device is None:
+        device = get_device()
     if masks.size > 10000*10000:
         if masks.size * 20 > torch.cuda.mem_get_info()[0]:
             dynamics_logger.warning('WARNING: image is very large, not using gpu to compute flows from masks for QC step flow_threshold')
@@ -687,6 +692,7 @@ def remove_bad_flow_masks(masks, flows, threshold=0.4, use_gpu=False, device=Non
     badi = 1+(merrors>threshold).nonzero()[0]
     masks[np.isin(masks, badi)] = 0
     return masks
+
 
 def get_masks(p, iscell=None, rpad=20):
     """ create masks using pixel convergence after running dynamics
@@ -819,6 +825,8 @@ def resize_image(img0, Ly=None, Lx=None, rsz=None, interpolation=cv2.INTER_LINEA
         ValueError: If Ly is None and rsz is None.
 
     """
+    if device is None:
+        device = get_device()
     if Ly is None and rsz is None:
         error_message = "must give size to resize to or factor to use for resizing"
         raise ValueError(error_message)

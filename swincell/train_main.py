@@ -11,19 +11,19 @@ import torch.nn.parallel
 import torch.utils.data.distributed
 from swincell.optimizers.lr_scheduler import LinearWarmupCosineAnnealingLR
 from swincell.trainer import run_training
-# from utils.data_utils import get_loader_Allen_tiff, folder_loader,folder_loader_cellpose
 from swincell.utils.data_utils import folder_loader
 from swincell.utils.utils import load_model
-# from uni_data_utils import get_loader_Allen_tiff
 
 from monai.inferers import sliding_window_inference
 from monai.losses import DiceLoss
-from torch.nn import MSELoss,BCEWithLogitsLoss
+from torch.nn import MSELoss
 
 from monai.metrics import DiceMetric
 from monai.networks.nets import SwinUNETR, UNet,ViTAutoEnc, UNETR
-from monai.transforms import Activations, AsDiscrete, Compose
+from monai.transforms import Activations, AsDiscrete
 from monai.utils.enums import MetricReduction
+from swincell.utils.device_utils import get_device, select_distributed_backend, is_cuda_available
+
 
 parser = argparse.ArgumentParser(description="SwinCell Training")
 parser.add_argument("--checkpoint", default=None, help="start training from saved checkpoint")
@@ -97,11 +97,16 @@ def main_worker(gpu, args):
     args.gpu = gpu
     if args.distributed:
         args.rank = args.rank * args.ngpus_per_node + gpu
+        backend = select_distributed_backend()
         dist.init_process_group(
-            backend='nccl', init_method="tcp://127.0.0.1:23456", world_size=args.world_size, rank=args.rank
+            backend=backend, init_method="tcp://127.0.0.1:23456", world_size=args.world_size, rank=args.rank
         )
-    torch.cuda.set_device(args.gpu)
-    torch.backends.cudnn.benchmark = True
+    if is_cuda_available():
+        # ensure we set the current GPU for CUDA multi-process training
+        torch.cuda.set_device(args.gpu)
+        torch.backends.cudnn.benchmark = True
+    else:
+        pass
     args.test_mode = False
     # loader = get_loader_Allen_tiff(args)  # Loader for allencell dataset
     loader = folder_loader(args)

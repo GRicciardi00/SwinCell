@@ -4,12 +4,13 @@ import sys
 from scipy import ndimage as ndi
 from scipy import stats
 import yaml
+from swincell.utils.device_utils import get_device
+import torch
 
 def load_config(config_path):
-    import torch
     config = _load_config_yaml(config_path)
     # Get a device to train on
-    device_name = config.get('device', 'cuda:0')
+    device_name = config.get('device', None)
     device = torch.device(device_name if torch.cuda.is_available() else 'cpu')
     config['device'] = device
     return config
